@@ -1,0 +1,70 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: warehouse_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: azamat123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+  redis:
+    image: redis:6
+    ports:
+      - "6379:6379"
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    env_file:
+      - backend/.env
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    command: celery -A core worker --pool=eventlet -l info
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - backend
+      - redis
+    env_file:
+      - backend/.env
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    command: celery -A core beat -l info
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - backend
+      - redis
+    env_file:
+      - backend/.env
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile-frontend
+    command: npm run dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+volumes:
+  postgres_data:
