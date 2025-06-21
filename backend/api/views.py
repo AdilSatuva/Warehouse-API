@@ -26,12 +26,20 @@ class StandardResultsSetPagination(PageNumberPagination):
     page_size_query_param = 'page_size'
     max_page_size = 100
 
-class LoginView(TokenObtainPairView):
-    def post(self, request, *args, **kwargs):
-        response = super().post(request, *args, **kwargs)
-        user = User.objects.get(username=request.data['username'])
-        response.data['role'] = user.role if hasattr(user, 'role') else 'clerk'
-        return response
+class LoginView(APIView):
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        user = authenticate(username=username, password=password)
+        if user:
+            refresh = RefreshToken.for_user(user)
+            refresh['role'] = user.role  # Добавляем роль в payload токена
+            return Response({
+                'access': str(refresh.access_token),
+                'refresh': str(refresh),
+                'role': user.role,
+            })
+        return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
 
 class UserProfileView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -251,7 +259,7 @@ class ProductListCreateView(APIView):
 
     @method_decorator(never_cache)
     def post(self, request):
-        if request.user.role not in ['admin', 'warehouse_manager']:
+        if request.user.role not in ['admin', 'warehouse_manager', 'clerk']:  # Добавлена роль clerk
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         serializer = ProductSerializer(data=request.data)
         if serializer.is_valid():
@@ -552,7 +560,7 @@ class OrderDetailView(APIView):
             order = Order.objects.get(pk=pk)
             serializer = OrderSerializer(order, data=request.data)
             if serializer.is_valid():
-                serializer.savefeer_order()
+                serializer.save()
                 logging.info(f"Order updated: {order.id} by {request.user.username}")
                 notify_low_stock.delay()
                 return Response(serializer.data)
@@ -665,10 +673,10 @@ class NotificationListCreateView(APIView):
 
 class StockBalanceCSVView(APIView):
     authentication_classes = [JWTAuthentication]
-    authentication_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        task = Export_stock_balance_to_csv.delay()
+        task = export_stock_balance_to_csv.delay()
         return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 
 class AuditLogView(APIView):
