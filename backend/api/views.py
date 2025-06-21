@@ -21,7 +21,6 @@ from api.tasks import export_stock_balance_to_csv, notify_low_stock
 
 logging.basicConfig(filename='logs/warehouse.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = 'page_size'
@@ -29,13 +28,20 @@ class StandardResultsSetPagination(PageNumberPagination):
 
 class CanManageProducts(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role in ['admin', 'warehouse_manager', 'clerk']
+        is_allowed = request.user.is_authenticated and request.user.role in ['admin', 'warehouse_manager', 'clerk']
+        logging.info(f"Checking permissions for user: {request.user.username}, role: {request.user.role}, authenticated: {request.user.is_authenticated}, allowed: {is_allowed}")
+        return is_allowed
 
 class LoginView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
-        user = User.objects.get(username=request.data['username'])
-        response.data['role'] = user.role if hasattr(user, 'role') else 'clerk'
+        try:
+            user = User.objects.get(username=request.data['username'])
+            response.data['role'] = user.role if hasattr(user, 'role') else 'clerk'
+            logging.info(f"User logged in: {user.username}, role: {response.data['role']}")
+        except User.DoesNotExist:
+            logging.error(f"Login failed: User {request.data['username']} not found")
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
         return response
 
 class UserProfileView(APIView):
@@ -256,6 +262,7 @@ class ProductListCreateView(APIView):
 
     @method_decorator(never_cache)
     def post(self, request):
+        logging.info(f"Product creation attempt by {request.user.username}: {request.data}")
         serializer = ProductSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(created_by=request.user)
@@ -541,7 +548,7 @@ class OrderDetailView(APIView):
 
     def get(self, request, pk):
         if request.user.role not in ['admin', 'warehouse_manager', 'logistician']:
-            return Response({"error": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         try:
             order = Order.objects.get(pk=pk)
             serializer = OrderSerializer(order)
@@ -556,7 +563,7 @@ class OrderDetailView(APIView):
             order = Order.objects.get(pk=pk)
             serializer = OrderSerializer(order, data=request.data)
             if serializer.is_valid():
-                serializer.savefeer_order()
+                serializer.save()
                 logging.info(f"Order updated: {order.id} by {request.user.username}")
                 notify_low_stock.delay()
                 return Response(serializer.data)
@@ -669,10 +676,10 @@ class NotificationListCreateView(APIView):
 
 class StockBalanceCSVView(APIView):
     authentication_classes = [JWTAuthentication]
-    authentication_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        task = Export_stock_balance_to_csv.delay()
+        task = export_stock_balance_to_csv.delay()
         return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 
 class AuditLogView(APIView):
