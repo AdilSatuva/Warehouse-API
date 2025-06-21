@@ -21,10 +21,15 @@ from api.tasks import export_stock_balance_to_csv, notify_low_stock
 
 logging.basicConfig(filename='logs/warehouse.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = 'page_size'
     max_page_size = 100
+
+class CanManageProducts(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in ['admin', 'warehouse_manager', 'clerk']
 
 class LoginView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
@@ -232,7 +237,7 @@ class CategoryDetailView(APIView):
 
 class ProductListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [CanManageProducts]
     pagination_class = StandardResultsSetPagination
 
     @method_decorator(cache_page(60))
@@ -243,7 +248,7 @@ class ProductListCreateView(APIView):
             products = products.filter(category_id=category_id)
         search = request.query_params.get('search')
         if search:
-            products = products.filter(name__icontains=search) | products.filter(sku__icontains=search)
+            products = products.filter(Q(name__icontains=search) | Q(sku__icontains=search))
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(products, request)
         serializer = ProductSerializer(page, many=True)
@@ -251,8 +256,6 @@ class ProductListCreateView(APIView):
 
     @method_decorator(never_cache)
     def post(self, request):
-        if request.user.role not in ['admin', 'warehouse_manager']:
-            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         serializer = ProductSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(created_by=request.user)
@@ -260,6 +263,7 @@ class ProductListCreateView(APIView):
             cache.delete_pattern('product_list*')
             notify_low_stock.delay()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        logging.error(f"Product creation failed: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class ProductDetailView(APIView):
