@@ -1,15 +1,15 @@
 from rest_framework import serializers
-from warehouse.models import User, Category, Warehouse, Product, Movement, Transfer, Order, Inventory, Notification, AuditLog
+from warehouse.models import User, Category, Warehouse, Product, StockMovement, StockTransfer, Order, Inventory, Notification, AuditLog
 
 class UserSerializer(serializers.ModelSerializer):
-    role = serializers.CharField(source='role', default='clerk')  # Используйте role напрямую
+    role = serializers.CharField(default='clerk')
 
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'role']
 
 class AssignRoleSerializer(serializers.Serializer):
-    role = serializers.ChoiceField(choices=[('admin', 'Admin'), ('manager', 'Manager'), ('clerk', 'Clerk')])
+    role = serializers.ChoiceField(choices=User.ROLE_CHOICES)
 
 class CategorySerializer(serializers.ModelSerializer):
     created_by = serializers.StringRelatedField()
@@ -31,20 +31,19 @@ class ProductSerializer(serializers.ModelSerializer):
     warehouse = serializers.StringRelatedField()
     created_by = serializers.StringRelatedField()
     qr_code = serializers.ImageField(required=False, allow_null=True)
-    quantity = serializers.IntegerField(source='get_quantity', read_only=True)
+
     class Meta:
         model = Product
-        fields = ['id', 'name', 'sku', 'unit', 'min_stock', 'quantity', 'warehouse', 'category', 'description', 'qr_code', 'created_by', 'created_at']
+        fields = ['id', 'name', 'sku', 'unit', 'min_stock', 'warehouse', 'category', 'description', 'qr_code', 'created_by', 'created_at']
 
-class MovementSerializer(serializers.ModelSerializer):
+class StockMovementSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
     warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.all())
     created_by = serializers.StringRelatedField()
-    performed_by = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
 
     class Meta:
-        model = Movement
-        fields = ['id', 'product', 'warehouse', 'operation', 'quantity', 'created_by', 'created_at', 'performed_by', 'timestamp']
+        model = StockMovement
+        fields = ['id', 'product', 'warehouse', 'operation', 'quantity', 'created_by', 'created_at']
 
 class StockBalanceSerializer(serializers.Serializer):
     product = serializers.IntegerField(required=False)
@@ -56,14 +55,14 @@ class StockBalanceSerializer(serializers.Serializer):
     current_stock = serializers.IntegerField(required=False)
     min_stock = serializers.IntegerField(required=False)
 
-class TransferSerializer(serializers.ModelSerializer):
+class StockTransferSerializer(serializers.ModelSerializer):
     from_warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.all())
     to_warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.all())
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
     created_by = serializers.StringRelatedField()
 
     class Meta:
-        model = Transfer
+        model = StockTransfer
         fields = ['id', 'from_warehouse', 'to_warehouse', 'product', 'quantity', 'created_by', 'created_at']
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -95,4 +94,4 @@ class AuditLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AuditLog
-        fields = ['id', 'user', 'action', 'model', 'object_id', 'timestamp', 'details']
+        fields = ['id', 'user', 'action', 'model_name', 'object_id', 'created_at', 'details']

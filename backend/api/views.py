@@ -3,7 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Sum, F, Case, When, IntegerField
+from django.db.models import Sum, F, Case, When, IntegerField, Q
 from django_filters.rest_framework import DjangoFilterBackend
 from django.views.decorators.cache import cache_page
 from django.utils.decorators import method_decorator
@@ -11,15 +11,15 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.views.decorators.cache import never_cache
 from django.core.cache import cache
-from warehouse.models import Product, Movement, Warehouse, User, AuditLog, Category, Inventory, Notification, Transfer, Order
+from warehouse.models import Product, StockMovement, Warehouse, User, AuditLog, Category, Inventory, Notification, StockTransfer, Order
 from api.serializers import (
     UserSerializer, AssignRoleSerializer, WarehouseSerializer, CategorySerializer,
-    ProductSerializer, MovementSerializer, StockBalanceSerializer, InventorySerializer,
-    NotificationSerializer, AuditLogSerializer, TransferSerializer, OrderSerializer
+    ProductSerializer, StockMovementSerializer, StockBalanceSerializer, InventorySerializer,
+    NotificationSerializer, AuditLogSerializer, StockTransferSerializer, OrderSerializer
 )
 from api.tasks import export_stock_balance_to_csv, notify_low_stock
 
-logging.basicConfig(filename='logs/warehouse.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 10
@@ -29,7 +29,7 @@ class StandardResultsSetPagination(PageNumberPagination):
 class CanManageProducts(permissions.BasePermission):
     def has_permission(self, request, view):
         is_allowed = request.user.is_authenticated and request.user.role in ['admin', 'warehouse_manager', 'clerk']
-        logging.info(f"Checking permissions for user: {request.user.username}, role: {request.user.role}, authenticated: {request.user.is_authenticated}, allowed: {is_allowed}")
+        logger.info(f"Checking permissions for user: {request.user.username}, role: {request.user.role}, authenticated: {request.user.is_authenticated}, allowed: {is_allowed}")
         return is_allowed
 
 class LoginView(TokenObtainPairView):
@@ -38,7 +38,7 @@ class LoginView(TokenObtainPairView):
         try:
             response = super().post(request, *args, **kwargs)
             user = User.objects.get(username=request.data['username'])
-            response.data['role'] = user.role  # Используйте user.role вместо user.profile.role
+            response.data['role'] = user.role
             logger.info(f"User logged in: {user.username}, role: {user.role}")
             return response
         except User.DoesNotExist:
@@ -75,7 +75,7 @@ class UserListCreateView(APIView):
         serializer = UserSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
-            logging.info(f"User created: {serializer.data['username']} by {request.user.username}")
+            logger.info(f"User created: {serializer.data['username']} by {request.user.username}")
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -92,11 +92,12 @@ class UserAssignRoleView(APIView):
             if serializer.is_valid():
                 user.role = serializer.validated_data['role']
                 user.save()
-                logging.info(f"Role assigned: {user.username} to {user.role} by {request.user.username}")
+                logger.info(f"Role assigned: {user.username} to {user.role} by {request.user.username}")
                 return Response(UserSerializer(user).data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
 class WarehouseListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
@@ -115,7 +116,7 @@ class WarehouseListCreateView(APIView):
 
     @method_decorator(never_cache)
     def post(self, request):
-        if request.user.role not in ['admin', 'warehouse_manager']:  # Используйте user.role
+        if request.user.role not in ['admin', 'warehouse_manager']:
             logger.warning(f"User {request.user.username} attempted to create warehouse without permission")
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         serializer = WarehouseSerializer(data=request.data)
@@ -148,7 +149,7 @@ class WarehouseDetailView(APIView):
             serializer = WarehouseSerializer(warehouse, data=request.data)
             if serializer.is_valid():
                 serializer.save()
-                logging.info(f"Warehouse updated: {warehouse.name} by {request.user.username}")
+                logger.info(f"Warehouse updated: {warehouse.name} by {request.user.username}")
                 cache.delete_pattern('warehouse_list*')
                 return Response(serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -162,7 +163,7 @@ class WarehouseDetailView(APIView):
         try:
             warehouse = Warehouse.objects.get(pk=pk)
             warehouse.delete()
-            logging.info(f"Warehouse deleted: {warehouse.name} by {request.user.username}")
+            logger.info(f"Warehouse deleted: {warehouse.name} by {request.user.username}")
             cache.delete_pattern('warehouse_list*')
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Warehouse.DoesNotExist:
@@ -204,7 +205,7 @@ class CategoryListCreateView(APIView):
         serializer = CategorySerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(created_by=request.user)
-            logging.info(f"Category created: {serializer.data['name']} by {request.user.username}")
+            logger.info(f"Category created: {serializer.data['name']} by {request.user.username}")
             cache.delete_pattern('category_list*')
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -230,7 +231,7 @@ class CategoryDetailView(APIView):
             serializer = CategorySerializer(category, data=request.data)
             if serializer.is_valid():
                 serializer.save()
-                logging.info(f"Category updated: {category.name} by {request.user.username}")
+                logger.info(f"Category updated: {category.name} by {request.user.username}")
                 cache.delete_pattern('category_list*')
                 return Response(serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -244,7 +245,7 @@ class CategoryDetailView(APIView):
         try:
             category = Category.objects.get(pk=pk)
             category.delete()
-            logging.info(f"Category deleted: {category.name} by {request.user.username}")
+            logger.info(f"Category deleted: {category.name} by {request.user.username}")
             cache.delete_pattern('category_list*')
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Category.DoesNotExist:
@@ -271,15 +272,15 @@ class ProductListCreateView(APIView):
 
     @method_decorator(never_cache)
     def post(self, request):
-        logging.info(f"Product creation attempt by {request.user.username}: {request.data}")
+        logger.info(f"Product creation attempt by {request.user.username}: {request.data}")
         serializer = ProductSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(created_by=request.user)
-            logging.info(f"Product created: {serializer.data['name']} by {request.user.username}")
+            logger.info(f"Product created: {serializer.data['name']} by {request.user.username}")
             cache.delete_pattern('product_list*')
             notify_low_stock.delay()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
-        logging.error(f"Product creation failed: {serializer.errors}")
+        logger.error(f"Product creation failed: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class ProductDetailView(APIView):
@@ -303,7 +304,7 @@ class ProductDetailView(APIView):
             serializer = ProductSerializer(product, data=request.data)
             if serializer.is_valid():
                 serializer.save()
-                logging.info(f"Product updated: {product.name} by {request.user.username}")
+                logger.info(f"Product updated: {product.name} by {request.user.username}")
                 cache.delete_pattern('product_list*')
                 notify_low_stock.delay()
                 return Response(serializer.data)
@@ -318,7 +319,7 @@ class ProductDetailView(APIView):
         try:
             product = Product.objects.get(pk=pk)
             product.delete()
-            logging.info(f"Product deleted: {product.name} by {request.user.username}")
+            logger.info(f"Product deleted: {product.name} by {request.user.username}")
             cache.delete_pattern('product_list*')
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Product.DoesNotExist:
@@ -333,12 +334,12 @@ class StockIncomeOutcomeView(APIView):
         if request.user.role not in ['admin', 'warehouse_manager', 'clerk']:
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         data = request.data.copy()
-        data['performed_by'] = request.user.id
-        serializer = MovementSerializer(data=data)
+        data['created_by'] = request.user.id
+        serializer = StockMovementSerializer(data=data)
         if serializer.is_valid():
             product = Product.objects.get(id=data['product'])
             if data['operation'] == 'outcome':
-                balance = Movement.objects.filter(product=product, warehouse=data['warehouse']).aggregate(
+                balance = StockMovement.objects.filter(product=product, warehouse=data['warehouse']).aggregate(
                     total=Sum(F('quantity') * Case(
                         When(operation='income', then=1),
                         When(operation='outcome', then=-1),
@@ -348,7 +349,7 @@ class StockIncomeOutcomeView(APIView):
                 if balance < data['quantity']:
                     return Response({"error": "Insufficient stock"}, status=status.HTTP_400_BAD_REQUEST)
             serializer.save()
-            logging.info(f"Stock {data['operation']}: {product.name} ({data['quantity']}) by {request.user.username}")
+            logger.info(f"Stock {data['operation']}: {product.name} ({data['quantity']}) by {request.user.username}")
             cache.delete_pattern('stock_movements*')
             cache.delete_pattern('stock_balance*')
             notify_low_stock.delay()
@@ -359,12 +360,12 @@ class StockMovementsView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['product', 'warehouse', 'operation', 'timestamp']
+    filterset_fields = ['product', 'warehouse', 'operation', 'created_at']
     pagination_class = StandardResultsSetPagination
 
     @method_decorator(cache_page(60*5))
     def get(self, request, product_id=None):
-        movements = Movement.objects.all()
+        movements = StockMovement.objects.all()
         if product_id:
             movements = movements.filter(product_id=product_id)
         warehouse_id = request.query_params.get('warehouse_id')
@@ -373,12 +374,12 @@ class StockMovementsView(APIView):
         if 'operation' in request.query_params:
             movements = movements.filter(operation=request.query_params['operation'])
         if 'date_start' in request.query_params:
-            movements = movements.filter(timestamp__gte=request.query_params['date_start'])
+            movements = movements.filter(created_at__gte=request.query_params['date_start'])
         if 'date_end' in request.query_params:
-            movements = movements.filter(timestamp__lte=request.query_params['date_end'])
+            movements = movements.filter(created_at__lte=request.query_params['date_end'])
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(movements, request)
-        serializer = MovementSerializer(page, many=True)
+        serializer = StockMovementSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)
 
 class StockBalanceView(APIView):
@@ -388,7 +389,7 @@ class StockBalanceView(APIView):
 
     @method_decorator(cache_page(60*5))
     def get(self, request, product_id=None):
-        movements = Movement.objects.all()
+        movements = StockMovement.objects.all()
         if product_id:
             movements = movements.filter(product_id=product_id)
         warehouse_id = request.query_params.get('warehouse_id')
@@ -423,10 +424,10 @@ class LowStockView(APIView):
             low_stock_products = []
             for product in products:
                 try:
-                    if not hasattr(product, 'warehouse') or not product.warehouse:
-                        logging.warning(f"Product {product.name} has no warehouse assigned")
+                    if not product.warehouse:
+                        logger.warning(f"Product {product.name} has no warehouse assigned")
                         continue
-                    balance = Movement.objects.filter(product=product, warehouse=product.warehouse).aggregate(
+                    balance = StockMovement.objects.filter(product=product, warehouse=product.warehouse).aggregate(
                         total=Sum(F('quantity') * Case(
                             When(operation='income', then=1),
                             When(operation='outcome', then=-1),
@@ -443,36 +444,36 @@ class LowStockView(APIView):
                             'warehouse_name': product.warehouse.name if product.warehouse else 'Unknown'
                         })
                 except Exception as e:
-                    logging.error(f"Error processing product {product.id}: {str(e)}")
+                    logger.error(f"Error processing product {product.id}: {str(e)}")
                     continue
             serializer = StockBalanceSerializer(low_stock_products, many=True)
             paginator = self.pagination_class()
             page = paginator.paginate_queryset(serializer.data, request)
             return paginator.get_paginated_response(page)
         except Exception as e:
-            logging.error(f"LowStockView error: {str(e)}")
+            logger.error(f"LowStockView error: {str(e)}")
             return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-class TransferListCreateView(APIView):
+class StockTransferListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         if request.user.role not in ['admin', 'warehouse_manager', 'logistician']:
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
-        transfers = Transfer.objects.all()
+        transfers = StockTransfer.objects.all()
         paginator = StandardResultsSetPagination()
         page = paginator.paginate_queryset(transfers, request)
-        serializer = TransferSerializer(page, many=True)
+        serializer = StockTransferSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
         if request.user.role not in ['admin', 'warehouse_manager', 'logistician']:
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
-        serializer = TransferSerializer(data=request.data)
+        serializer = StockTransferSerializer(data=request.data)
         if serializer.is_valid():
             product = Product.objects.get(id=request.data['product'])
-            balance = Movement.objects.filter(product=product, warehouse=request.data['from_warehouse']).aggregate(
+            balance = StockMovement.objects.filter(product=product, warehouse=request.data['from_warehouse']).aggregate(
                 total=Sum(F('quantity') * Case(
                     When(operation='income', then=1),
                     When(operation='outcome', then=-1),
@@ -482,12 +483,12 @@ class TransferListCreateView(APIView):
             if balance < request.data['quantity']:
                 return Response({"error": "Insufficient stock in source warehouse"}, status=status.HTTP_400_BAD_REQUEST)
             serializer.save(created_by=request.user)
-            logging.info(f"Transfer created: {product.name} ({request.data['quantity']}) from {request.data['from_warehouse']} to {request.data['to_warehouse']} by {request.user.username}")
+            logger.info(f"Transfer created: {product.name} ({request.data['quantity']}) from {request.data['from_warehouse']} to {request.data['to_warehouse']} by {request.user.username}")
             notify_low_stock.delay()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class TransferDetailView(APIView):
+class StockTransferDetailView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
@@ -495,36 +496,36 @@ class TransferDetailView(APIView):
         if request.user.role not in ['admin', 'warehouse_manager', 'logistician']:
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         try:
-            transfer = Transfer.objects.get(pk=pk)
-            serializer = TransferSerializer(transfer)
+            transfer = StockTransfer.objects.get(pk=pk)
+            serializer = StockTransferSerializer(transfer)
             return Response(serializer.data)
-        except Transfer.DoesNotExist:
+        except StockTransfer.DoesNotExist:
             return Response({"error": "Transfer not found"}, status=status.HTTP_404_NOT_FOUND)
 
     def put(self, request, pk):
         if request.user.role not in ['admin', 'warehouse_manager', 'logistician']:
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         try:
-            transfer = Transfer.objects.get(pk=pk)
-            serializer = TransferSerializer(transfer, data=request.data)
+            transfer = StockTransfer.objects.get(pk=pk)
+            serializer = StockTransferSerializer(transfer, data=request.data)
             if serializer.is_valid():
                 serializer.save()
-                logging.info(f"Transfer updated: {transfer.id} by {request.user.username}")
+                logger.info(f"Transfer updated: {transfer.id} by {request.user.username}")
                 notify_low_stock.delay()
                 return Response(serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        except Transfer.DoesNotExist:
+        except StockTransfer.DoesNotExist:
             return Response({"error": "Transfer not found"}, status=status.HTTP_404_NOT_FOUND)
 
     def delete(self, request, pk):
         if request.user.role != 'admin':
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         try:
-            transfer = Transfer.objects.get(pk=pk)
+            transfer = StockTransfer.objects.get(pk=pk)
             transfer.delete()
-            logging.info(f"Transfer deleted: {transfer.id} by {request.user.username}")
+            logger.info(f"Transfer deleted: {transfer.id} by {request.user.username}")
             return Response(status=status.HTTP_204_NO_CONTENT)
-        except Transfer.DoesNotExist:
+        except StockTransfer.DoesNotExist:
             return Response({"error": "Transfer not found"}, status=status.HTTP_404_NOT_FOUND)
 
 class OrderListCreateView(APIView):
@@ -546,7 +547,7 @@ class OrderListCreateView(APIView):
         serializer = OrderSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(created_by=request.user)
-            logging.info(f"Order created: {serializer.data['id']} by {request.user.username}")
+            logger.info(f"Order created: {serializer.data['id']} by {request.user.username}")
             notify_low_stock.delay()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -573,7 +574,7 @@ class OrderDetailView(APIView):
             serializer = OrderSerializer(order, data=request.data)
             if serializer.is_valid():
                 serializer.save()
-                logging.info(f"Order updated: {order.id} by {request.user.username}")
+                logger.info(f"Order updated: {order.id} by {request.user.username}")
                 notify_low_stock.delay()
                 return Response(serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -586,7 +587,7 @@ class OrderDetailView(APIView):
         try:
             order = Order.objects.get(pk=pk)
             order.delete()
-            logging.info(f"Order deleted: {order.id} by {request.user.username}")
+            logger.info(f"Order deleted: {order.id} by {request.user.username}")
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Order.DoesNotExist:
             return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -615,7 +616,7 @@ class InventoryListCreateView(APIView):
         serializer = InventorySerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(created_by=request.user)
-            logging.info(f"Inventory created for product {serializer.data['product']} by {request.user.username}")
+            logger.info(f"Inventory created for product {serializer.data['product']} by {request.user.username}")
             notify_low_stock.delay()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -642,7 +643,7 @@ class InventoryDetailView(APIView):
             serializer = InventorySerializer(inventory, data=request.data)
             if serializer.is_valid():
                 serializer.save()
-                logging.info(f"Inventory updated: {inventory.id} by {request.user.username}")
+                logger.info(f"Inventory updated: {inventory.id} by {request.user.username}")
                 notify_low_stock.delay()
                 return Response(serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -655,7 +656,7 @@ class InventoryDetailView(APIView):
         try:
             inventory = Inventory.objects.get(pk=pk)
             inventory.delete()
-            logging.info(f"Inventory deleted: {inventory.id} by {request.user.username}")
+            logger.info(f"Inventory deleted: {inventory.id} by {request.user.username}")
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Inventory.DoesNotExist:
             return Response({"error": "Inventory not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -679,7 +680,7 @@ class NotificationListCreateView(APIView):
         serializer = NotificationSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(user=request.user)
-            logging.info(f"Notification created: {serializer.data['message']} by {request.user.username}")
+            logger.info(f"Notification created: {serializer.data['message']} by {request.user.username}")
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -701,7 +702,7 @@ class AuditLogView(APIView):
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         logs = AuditLog.objects.all()
         if 'model_name' in request.query_params:
-            logs = logs.filter(model=request.query_params['model_name'])
+            logs = logs.filter(model_name=request.query_params['model_name'])
         if 'action' in request.query_params:
             logs = logs.filter(action=request.query_params['action'])
         paginator = self.pagination_class()
@@ -721,7 +722,7 @@ class AnalyticsView(APIView):
             'total_warehouses': Warehouse.objects.count(),
             'low_stock_count': sum(
                 1 for product in Product.objects.all()
-                if (Movement.objects.filter(product=product, warehouse=product.warehouse).aggregate(
+                if (StockMovement.objects.filter(product=product, warehouse=product.warehouse).aggregate(
                     total=Sum(F('quantity') * Case(
                         When(operation='income', then=1),
                         When(operation='outcome', then=-1),
