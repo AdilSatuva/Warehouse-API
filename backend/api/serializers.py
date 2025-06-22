@@ -2,9 +2,11 @@ from rest_framework import serializers
 from warehouse.models import User, Category, Warehouse, Product, Movement, Transfer, Order, Inventory, Notification, AuditLog
 
 class UserSerializer(serializers.ModelSerializer):
+    role = serializers.CharField(source='role', default='clerk')  # Используйте role напрямую
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'role']
+        fields = ['id', 'username', 'email', 'role']
 
 class AssignRoleSerializer(serializers.Serializer):
     role = serializers.ChoiceField(choices=[('admin', 'Admin'), ('manager', 'Manager'), ('clerk', 'Clerk')])
@@ -29,7 +31,7 @@ class ProductSerializer(serializers.ModelSerializer):
     warehouse = serializers.StringRelatedField()
     created_by = serializers.StringRelatedField()
     qr_code = serializers.ImageField(required=False, allow_null=True)
-
+    quantity = serializers.IntegerField(source='get_quantity', read_only=True)
     class Meta:
         model = Product
         fields = ['id', 'name', 'sku', 'unit', 'min_stock', 'quantity', 'warehouse', 'category', 'description', 'qr_code', 'created_by', 'created_at']

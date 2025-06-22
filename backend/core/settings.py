@@ -71,12 +71,28 @@ DATABASES = {
 AUTH_USER_MODEL = 'warehouse.User'
 
 CORS_ALLOWED_ORIGINS = [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    'https://your-frontend-domain.com',
+    'http://localhost:5177',  # Frontend origin
+    'http://localhost:3000',  # Дополнительные порты, если использовались
 ]
 
+CORS_ALLOW_METHODS = [
+    'GET',
+    'POST',
+    'PUT',
+    'PATCH',
+    'DELETE',
+    'OPTIONS',
+]
+
+CORS_ALLOW_HEADERS = [
+    'authorization',
+    'content-type',
+    'accept',
+    'origin',
+    'x-csrftoken',
+]
+
+CORS_ALLOW_ALL_ORIGINS = False
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',

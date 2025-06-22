@@ -34,15 +34,19 @@ class CanManageProducts(permissions.BasePermission):
 
 class LoginView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
-        response = super().post(request, *args, **kwargs)
+        logger.info(f"Login attempt for username: {request.data.get('username')}")
         try:
+            response = super().post(request, *args, **kwargs)
             user = User.objects.get(username=request.data['username'])
-            response.data['role'] = user.role if hasattr(user, 'role') else 'clerk'
-            logging.info(f"User logged in: {user.username}, role: {response.data['role']}")
+            response.data['role'] = user.role  # Используйте user.role вместо user.profile.role
+            logger.info(f"User logged in: {user.username}, role: {user.role}")
+            return response
         except User.DoesNotExist:
-            logging.error(f"Login failed: User {request.data['username']} not found")
+            logger.error(f"Login failed: User {request.data.get('username')} not found")
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-        return response
+        except Exception as e:
+            logger.error(f"Login error: {str(e)}")
+            return Response({"error": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
 class UserProfileView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -93,14 +97,17 @@ class UserAssignRoleView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-
 class WarehouseListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     @method_decorator(cache_page(60*10))
     def get(self, request):
+        logger.info(f"Warehouse list requested by {request.user.username}")
         warehouses = Warehouse.objects.all()
+        search = request.query_params.get('search')
+        if search:
+            warehouses = warehouses.filter(Q(name__icontains=search) | Q(location__icontains=search))
         paginator = StandardResultsSetPagination()
         page = paginator.paginate_queryset(warehouses, request)
         serializer = WarehouseSerializer(page, many=True)
@@ -108,14 +115,16 @@ class WarehouseListCreateView(APIView):
 
     @method_decorator(never_cache)
     def post(self, request):
-        if request.user.role != 'admin':
+        if request.user.role not in ['admin', 'warehouse_manager']:  # Используйте user.role
+            logger.warning(f"User {request.user.username} attempted to create warehouse without permission")
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         serializer = WarehouseSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
-            logging.info(f"Warehouse created: {serializer.data['name']} by {request.user.username}")
+            serializer.save(created_by=request.user)
+            logger.info(f"Warehouse created: {serializer.data['name']} by {request.user.username}")
             cache.delete_pattern('warehouse_list*')
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        logger.error(f"Warehouse creation failed: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class WarehouseDetailView(APIView):
