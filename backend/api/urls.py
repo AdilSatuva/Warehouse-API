@@ -1,18 +1,25 @@
-from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     LoginView, UserProfileView, UserListCreateView, UserAssignRoleView,
     WarehouseListCreateView, WarehouseDetailView, WarehouseProductsView,
     CategoryListCreateView, CategoryDetailView,
-    ProductListCreateView, ProductDetailView,
+    ProductViewSet,
     StockIncomeOutcomeView, StockMovementsView, StockBalanceView, LowStockView,
     StockTransferListCreateView, StockTransferDetailView,
     OrderListCreateView, OrderDetailView,
     InventoryListCreateView, InventoryDetailView,
-    NotificationListCreateView, StockBalanceCSVView, AuditLogView, AnalyticsView
+    NotificationListCreateView, StockBalanceCsvView, AuditLogView, AnalyticsView
 )
 
+router = DefaultRouter()
+router.register(r'products', ProductViewSet, basename='product')
+
 urlpatterns = [
+    path('', include(router.urls)),
     path('auth/login/', LoginView.as_view(), name='login'),
+    path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('users/me/', UserProfileView.as_view(), name='user_profile'),
     path('users/', UserListCreateView.as_view(), name='user_list_create'),
     path('users/<int:pk>/assign-role/', UserAssignRoleView.as_view(), name='user_assign_role'),
@@ -21,8 +28,6 @@ urlpatterns = [
     path('warehouses/<int:pk>/products/', WarehouseProductsView.as_view(), name='warehouse_products'),
     path('categories/', CategoryListCreateView.as_view(), name='category_list_create'),
     path('categories/<int:pk>/', CategoryDetailView.as_view(), name='category_detail'),
-    path('products/', ProductListCreateView.as_view(), name='product_list_create'),
-    path('products/<int:pk>/', ProductDetailView.as_view(), name='product_detail'),
     path('stock/income-outcome/', StockIncomeOutcomeView.as_view(), name='stock_income_outcome'),
     path('stock/movements/', StockMovementsView.as_view(), name='stock_movements'),
     path('stock/movements/<int:product_id>/', StockMovementsView.as_view(), name='stock_movements_product'),
@@ -36,7 +41,7 @@ urlpatterns = [
     path('inventory/', InventoryListCreateView.as_view(), name='inventory_list_create'),
     path('inventory/<int:pk>/', InventoryDetailView.as_view(), name='inventory_detail'),
     path('notifications/', NotificationListCreateView.as_view(), name='notification_list_create'),
-    path('stock/balance/csv/', StockBalanceCSVView.as_view(), name='stock_balance_csv'),
+    path('stock/balance/csv/', StockBalanceCsvView.as_view(), name='stock_balance_csv'),
     path('audit/', AuditLogView.as_view(), name='audit_log'),
     path('analytics/', AnalyticsView.as_view(), name='analytics'),
 ]
